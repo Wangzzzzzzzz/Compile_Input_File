@@ -1,0 +1,4 @@
+Flag_Label	Count	Flag_Meaning
+0	1579	Normal
+1	671	2 unique seq with duplicates
+2	1919	More than 2 unique seq
