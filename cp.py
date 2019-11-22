@@ -157,6 +157,28 @@ def generate_mut_row(raw_series):
                 Mut.append(pdb_id + '_' + chain.id)
         return (Wild[0], Wild[1], Mut[0], Mut[1], ddG, 0)
 
+def summarize_flag(raw_dataset, output):
+    # generate a new dataset with protein chain
+    flag_dict = dict()
+    protein_tracker = set()
+    for _, row in raw_dataset.iterrows():
+        pdb_id = row['Wild1'][0:4]
+        if pdb_id in protein_tracker:
+            assert row['Flag'] == flag_dict[pdb_id], 'One Protein will not have more than 1 flag.'
+        else:
+            flag_dict[pdb_id] = row['Flag']
+            protein_tracker.add(pdb_id)
+    protein_flag_df = pd.DataFrame(list(flag_dict.items()),columns=['Protein','Flag'])
+    protein_flag_df['Flag_Meaning'] = [FLAG_TABL[i] for i in protein_flag_df['Flag']]
+    flag_summary = protein_flag_df['Flag'].value_counts(sort=False)
+    protein_flag_summary = pd.DataFrame({
+        'Flag_Label': flag_summary.index,
+        'Count': flag_summary.values,
+        'Flag_Meaning': [FLAG_TABL[i] for i in flag_summary.index]
+    })
+    with pd.ExcelWriter(output) as output_wr:
+        protein_flag_summary.to_excel(output_wr, 'Summary')
+        protein_flag_df.to_excel(output_wr,'Protein_Flag')
 
 def main():
     if not os.path.exists('./dataset'):
@@ -181,6 +203,9 @@ def main():
                             'Count':Res_summary.values,
                             'Flag_Meaning':[FLAG_TABL[i] for i in Res_summary.index]})
     Summary.to_csv('./output/Summary.csv', sep='\t', index=False)
+
+    # output summary for each protein
+    summarize_flag(raw_data,'./output/Protein_summary.xlsx')
     
 
 
