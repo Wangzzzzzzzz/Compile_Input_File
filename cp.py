@@ -10,6 +10,7 @@ CACHE = {'pdb_id':None,'Model':None,'PP_Chain':None,'Num_Uni':None, 'Uni_Chain':
 FLAG_TABL = {0:'Normal',1:'2 unique seq with duplicates',
              2: 'More than 2 unique seq', 3: 'Less than 2 seq'}
 
+
 def read_in_file(file_dir):
     file_dir = './dataset/' + file_dir
     dataset = pd.read_csv(file_dir,sep='\t')
@@ -26,8 +27,9 @@ def obtain_pdb(dataset):
     if not os.path.exists('./FASTA'):
         os.mkdir('./FASTA')
     for item in pdb_set:
-        os.system("""wget -q -O - "https://www.rcsb.org/pdb/download/viewFastaFiles.do?structureIdList={}&compressionType=uncompressed" > ./FASTA/{}.fasta""".format(item,item))
-        time.sleep(0.1)
+        if not os.path.exists("./FASTA/{}.fasta".format(item)):
+            os.system("""wget -q -O - "https://www.rcsb.org/pdb/download/viewFastaFiles.do?structureIdList={}&compressionType=uncompressed" > ./FASTA/{}.fasta""".format(item,item))
+            time.sleep(0.1)
         assert (os.stat("./FASTA/{}.fasta".format(item)).st_size != 0), 'Download Failed, Empty File generated.'
 
 # find the unique chains 
@@ -48,6 +50,78 @@ def find_unique_seq(mutation):
     unique_chain = {uni_id:Chains[uni_id] for uni_id in unique_id}
 
     return num_unique, unique_chain
+
+def output_mutant_seq(raw_dataset, output_file):
+    global CACHE
+    chain_tracker = set()
+    chain_store = dict()
+    output_file = './output/' + output_file
+    for _, raw_series in raw_dataset.iterrows():
+        pdb_id = raw_series['pdb']
+        mutation = raw_series['mutation']
+        WD = mutation[0]
+        MU = mutation[-1]
+        chain_pos = mutation[2:-1]
+        mu_chain_id = mutation[1]
+        if chain_pos[-1].isdigit():
+            mu_residue_id = (" ", int(chain_pos), " ")
+        else:
+            mu_residue_id = (" ", int(chain_pos[:-1]), chain_pos[-1].upper())
+        parser = PDBParser()
+        builder = PPBuilder()
+        if not CACHE['pdb_id'] == pdb_id:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                pdb_struc = parser.get_structure(id=pdb_id,file='./PDB/pdb'+pdb_id.lower()+'.ent')
+            # store to CACHE if encounter a new pdb
+            model = pdb_struc[0]
+            CACHE['pdb_id'], CACHE['Model'], CACHE['Num_Uni'], CACHE['Uni_Chain'] = pdb_id, model, None, None
+            with open('./FASTA/' + pdb_id + '.fasta','r') as hdl:
+                CACHE['PP_Chain'] = {rec.id[5]:str(rec.seq) for rec in SeqIO.parse(hdl,"fasta")}
+        else:
+            model = CACHE['Model']
+
+        num_unique_chains = CACHE['Num_Uni']
+        unique_chains = CACHE['Uni_Chain']
+        if num_unique_chains is None:
+            num_unique_chains, unique_chains = find_unique_seq(mutation)
+            CACHE['Num_Uni'] = num_unique_chains
+            CACHE['Uni_Chain'] = unique_chains
+
+        # handle wild type
+        for unique_chain_id in unique_chains:
+            protein_chain = model[unique_chain_id]
+            seq_identifier = pdb_id + '_' + unique_chain_id
+            if not seq_identifier in chain_tracker:
+                chain = "".join([str(pp.get_sequence()).replace('\n', '')
+                                 for pp in builder.build_peptides(protein_chain)])
+                chain_store[seq_identifier] = chain
+                chain_tracker.add(seq_identifier)
+        
+        # find the mutant chain
+        protein_chain = model[mu_chain_id]
+        seq_identifier = pdb_id + '_' + mu_chain_id + '_' + mutation
+        if not seq_identifier in chain_tracker:
+            mu_chain = []
+            for residue in protein_chain:
+                if residue.get_id()[0] != ' ':
+                    continue
+                else:
+                    if residue.get_id()[1] == mu_residue_id[1] and residue.get_id()[2] == mu_residue_id[2]:
+                        assert three_to_one(residue.get_resname()) == WD
+                        mu_chain.append(MU)
+                    else:
+                        try:
+                            mu_chain.append(three_to_one(residue.get_resname()))
+                        except:
+                            pass
+            chain = "".join(mu_chain)
+            chain_store[seq_identifier] = chain
+            chain_tracker.add(seq_identifier)
+
+    with open(output_file, 'w') as output_hl:
+        for k, v in chain_store.items():
+            output_hl.write(k+'\t'+v+'\n')
 
 # handle cases where there are more than 2 unique chaines
 def multi_unique_chain_handler(mutation, ddG, unique_chains):
@@ -119,7 +193,6 @@ def generate_mut_row(raw_series):
     mutation = raw_series['mutation']
     ddG = raw_series['actual']
     parser = PDBParser()
-    builder = PPBuilder()
     if not CACHE['pdb_id'] == pdb_id:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -206,6 +279,9 @@ def main():
 
     # output summary for each protein
     summarize_flag(raw_data,'./output/Protein_summary.xlsx')
+
+    # output mutant chains
+    output_mutant_seq(dataset, 'MU_WD_seq.txt')
     
 
 
